@@ -1,7 +1,6 @@
 import assert from 'assert';
 import axios from 'axios';
 import { Address4, Address6 } from 'ip-address';
-import { readFileSync } from 'fs';
 
 interface AmazonIpv4Prefix {
   ip_prefix: string;
@@ -41,9 +40,9 @@ export class AmazonNetwork {
     this.subnet = params.subnet;
 
     if (params.offline === true) {
-      this.prefixes = readFileSync(
-        './offline-prefixes.json'
-      ) as AmazonIpRangesResponse;
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const file = require('./offline-prefixes');
+      this.prefixes = file.offlinePrefixes;
     }
   }
 
@@ -146,6 +145,3 @@ export class AmazonNetwork {
     return found;
   }
 }
-
-new AmazonNetwork().setSubnet('46.51.192.0').search();
-new AmazonNetwork({ subnet: '2600:1f70:c000::/56', offline: true }).search();
