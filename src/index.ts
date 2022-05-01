@@ -1,111 +1,151 @@
 import assert from 'assert';
 import axios from 'axios';
 import { Address4, Address6 } from 'ip-address';
+import { readFileSync } from 'fs';
 
-export interface AmazonIpv4Prefix {
+interface AmazonIpv4Prefix {
   ip_prefix: string;
   region: string;
   service: string;
   network_border_group: string;
 }
 
-export interface AmazonIpv6Prefix {
+interface AmazonIpv6Prefix {
   ipv6_prefix: string;
   region: string;
   service: string;
   network_border_group: string;
 }
 
-export interface AmazonIpRangesResponse {
+interface AmazonIpRangesResponse {
   syncToken?: string;
   createDate?: string;
   prefixes?: AmazonIpv4Prefix[];
   ipv6_prefixes?: AmazonIpv6Prefix[];
 }
 
-export async function getPrefixes() {
-  const endpoint = 'https://ip-ranges.amazonaws.com/ip-ranges.json';
-  const get = await axios({
-    url: process.env['AWS_END_POINT'] || endpoint,
-    method: 'GET',
-  });
-
-  const prefixes: AmazonIpRangesResponse = get.data;
-
-  return prefixes;
+interface IsAmazonNetworkClass {
+  subnet?: string;
+  endpoint?: string;
+  offline?: boolean;
 }
 
-export async function handleV4(subnet: string) {
-  const prefixes = await getPrefixes();
+export class AmazonNetwork {
+  protected endpoint = 'https://ip-ranges.amazonaws.com/ip-ranges.json';
+  protected ranges?: AmazonIpRangesResponse;
+  protected subnet?: string;
+  protected prefixes?: AmazonIpRangesResponse;
 
-  const found = [];
+  constructor(params: IsAmazonNetworkClass = {}) {
+    this.endpoint = params.endpoint || this.endpoint;
+    this.subnet = params.subnet;
 
-  const _subnet = new Address4(subnet);
+    if (params.offline === true) {
+      this.prefixes = readFileSync(
+        './offline-prefixes.json'
+      ) as AmazonIpRangesResponse;
+    }
+  }
 
-  assert(prefixes.prefixes, 'unable to get amazon v4 prefixes');
+  protected async setPrefixes() {
+    const get = await axios({
+      url: this.endpoint,
+      method: 'GET',
+    });
 
-  if (_subnet.isCorrect()) {
-    for (const prefix of prefixes.prefixes) {
-      if (prefix.ip_prefix) {
-        const supernet = new Address4(prefix.ip_prefix);
-        if (_subnet.isInSubnet(supernet)) {
-          found.push(prefix);
+    this.prefixes = get.data;
+
+    return this;
+  }
+
+  protected async handleV4() {
+    assert(this.subnet, 'missing subnet');
+    if (this.prefixes === undefined) {
+      await this.setPrefixes();
+    }
+
+    assert(this.prefixes, 'missing all amazon prefixes');
+    assert(this.prefixes.prefixes, 'unable to get amazon v4 prefixes');
+
+    const found = [];
+
+    const _subnet = new Address4(this.subnet);
+
+    if (_subnet.isCorrect()) {
+      for (const prefix of this.prefixes.prefixes) {
+        if (prefix.ip_prefix) {
+          const supernet = new Address4(prefix.ip_prefix);
+          if (_subnet.isInSubnet(supernet)) {
+            found.push(prefix);
+          }
         }
       }
     }
+    return found;
   }
-  return found;
-}
 
-export async function handleV6(subnet: string) {
-  const prefixes = await getPrefixes();
+  protected async handleV6() {
+    assert(this.subnet, 'missing subnet');
 
-  const found = [];
+    if (this.prefixes === undefined) {
+      await this.setPrefixes();
+    }
 
-  const _subnet = new Address6(subnet);
+    assert(this.prefixes, 'missing all amazon prefixes');
+    assert(this.prefixes.ipv6_prefixes, 'unable to get amazon v6 prefixes');
 
-  assert(prefixes.ipv6_prefixes, 'unable to get amazon v6 prefixes');
+    const found = [];
 
-  if (_subnet.isCorrect()) {
-    for (const prefix of prefixes.ipv6_prefixes) {
-      if (prefix.ipv6_prefix) {
-        const supernet = new Address6(prefix.ipv6_prefix);
-        if (_subnet.isInSubnet(supernet)) {
-          found.push(prefix);
+    const _subnet = new Address6(this.subnet);
+
+    if (_subnet.isCorrect()) {
+      for (const prefix of this.prefixes.ipv6_prefixes) {
+        if (prefix.ipv6_prefix) {
+          const supernet = new Address6(prefix.ipv6_prefix);
+          if (_subnet.isInSubnet(supernet)) {
+            found.push(prefix);
+          }
         }
       }
     }
-  }
-  return found;
-}
-
-export function getType(subnet: string) {
-  let type: 'v4' | 'v6';
-  try {
-    new Address4(subnet);
-    type = 'v4';
-  } catch (err) {
-    new Address6(subnet);
-    type = 'v6';
+    return found;
   }
 
-  return type;
-}
+  protected getType(subnet: string) {
+    let type: 'v4' | 'v6';
+    try {
+      new Address4(subnet);
+      type = 'v4';
+    } catch (err) {
+      new Address6(subnet);
+      type = 'v6';
+    }
 
-export async function searchPrefixes(subnet: string) {
-  const type = getType(subnet);
-
-  let found;
-
-  if (type === 'v4') {
-    found = await handleV4(subnet);
-  } else if (type === 'v6') {
-    found = await handleV6(subnet);
+    return type;
   }
 
-  console.log(found);
-  return found;
+  setSubnet(subnet: string) {
+    this.subnet = subnet;
+    return this;
+  }
+
+  async search() {
+    assert(this.subnet, 'missing subnet');
+
+    const type = this.getType(this.subnet);
+
+    let found;
+
+    if (type === 'v4') {
+      found = await this.handleV4();
+    } else if (type === 'v6') {
+      found = await this.handleV6();
+    }
+
+    console.log(found);
+    return found;
+  }
 }
 
-searchPrefixes('46.51.192.0');
-searchPrefixes('2600:1f70:c000::/56');
+new AmazonNetwork().setSubnet('46.51.192.0').search();
+new AmazonNetwork({ subnet: '2600:1f70:c000::/56', offline: true }).search();
